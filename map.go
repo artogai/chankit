@@ -2,38 +2,22 @@ package chankit
 
 import (
 	"context"
-	"log"
-
-	"golang.org/x/sync/errgroup"
+	"sync"
 )
 
-func Map[A, B any](ctx context.Context, eg *errgroup.Group, in <-chan A, fn func(A) B) <-chan B {
-	return MapErrCtx(ctx, eg, in, func(ctx context.Context, a A) (B, error) {
-		return fn(a), nil
-	})
-}
-
-func MapErr[A, B any](ctx context.Context, eg *errgroup.Group, in <-chan A, fn func(A) (B, error)) <-chan B {
-	return MapErrCtx(ctx, eg, in, func(ctx context.Context, a A) (B, error) {
-		return fn(a)
-	})
-}
-
-func MapErrCtx[A, B any](
+func Map[A, B any](
 	ctx context.Context,
-	eg *errgroup.Group,
+	p *Pipeline,
 	in <-chan A,
 	fn func(context.Context, A) (B, error),
-	bufSize ...int,
+	opts ...Option,
 ) <-chan B {
-	size := 0
-	if len(bufSize) > 0 {
-		size = bufSize[0]
-	}
-	out := make(chan B, size)
+	cfg := makeConfig(opts)
+	out := make(chan B, cfg.bufCap)
 
-	eg.Go(func() error {
+	p.goSafe(func() error {
 		defer close(out)
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -42,15 +26,16 @@ func MapErrCtx[A, B any](
 				if !ok {
 					return nil
 				}
+
 				b, err := fn(ctx, a)
 				if err != nil {
 					return err
 				}
 
 				select {
-				case out <- b:
 				case <-ctx.Done():
 					return ctx.Err()
+				case out <- b:
 				}
 			}
 		}
@@ -59,24 +44,193 @@ func MapErrCtx[A, B any](
 	return out
 }
 
-func test(ctx context.Context, in <-chan int) (<-chan int, *errgroup.Group) {
-	eg, ctx := errgroup.WithContext(ctx)
-	out1 := Map(ctx, eg, in, func(i int) int { return i + 1 })
-	out2 := MapErr(ctx, eg, out1, func(i int) (int, error) { return i, nil })
-	out3 := MapErrCtx(ctx, eg, out2, func(ctx context.Context, i int) (int, error) { return i, nil })
-	return out3, eg
+func MapConcUnordered[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	parN int,
+	fn func(context.Context, A) (B, error),
+	opts ...Option,
+) <-chan B {
+	if parN <= 0 {
+		panic("parN must be > 0")
+	}
+
+	cfg := makeConfig(opts)
+	out := make(chan B, cfg.bufCap)
+
+	var wg sync.WaitGroup
+	for range parN {
+		wg.Add(1)
+		p.goSafe(func() error {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case a, ok := <-in:
+					if !ok {
+						return nil
+					}
+
+					b, err := fn(ctx, a)
+					if err != nil {
+						return err
+					}
+
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case out <- b:
+					}
+				}
+			}
+		})
+	}
+
+	p.goSafe(func() error {
+		wg.Wait()
+		close(out)
+		return nil
+	})
+
+	return out
 }
 
-func main() {
-	ctx := context.Background()
-	var in <-chan int
-	out, eg := test(ctx, in)
-
-	for o := range out {
-		println(o)
+func MapConcOrdered[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	parN int,
+	fn func(context.Context, A) (B, error),
+	opts ...Option,
+) <-chan B {
+	if parN <= 0 {
+		panic("parN must be > 0")
 	}
 
-	if err := eg.Wait(); err != nil {
-		log.Fatal("error: ", err)
+	cfg := makeConfig(opts)
+	out := make(chan B, cfg.bufCap)
+
+	type job struct {
+		idx int64
+		val A
 	}
+
+	type res struct {
+		idx int64
+		val B
+	}
+
+	sem := make(chan struct{}, parN*4)
+	jobCh := make(chan job, parN)
+	resCh := make(chan res, parN)
+
+	p.goSafe(func() error {
+		defer close(jobCh)
+		for idx := int64(0); ; idx++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case a, ok := <-in:
+				if !ok {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case jobCh <- job{idx, a}:
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case sem <- struct{}{}: // blocks when gap >= window
+				}
+			}
+		}
+	})
+
+	var wg sync.WaitGroup
+	for range parN {
+		wg.Add(1)
+		p.goSafe(func() error {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case job, ok := <-jobCh:
+					if !ok {
+						return nil
+					}
+
+					b, err := fn(ctx, job.val)
+					if err != nil {
+						return err
+					}
+
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case resCh <- res{job.idx, b}:
+					}
+				}
+			}
+		})
+	}
+
+	p.goSafe(func() error {
+		wg.Wait()
+		close(resCh)
+		return nil
+	})
+
+	p.goSafe(func() error {
+		defer close(out)
+
+		next := int64(0)
+		buffer := make(map[int64]B, parN)
+
+		emit := func(v B) {
+			out <- v
+			<-sem
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case res, ok := <-resCh:
+				if !ok {
+					for {
+						v, ok := buffer[next]
+						if !ok {
+							return nil
+						}
+						emit(v)
+						delete(buffer, next)
+						next++
+					}
+				}
+				if res.idx == next {
+					emit(res.val)
+					next++
+					for {
+						v, ok := buffer[next]
+						if !ok {
+							break
+						}
+						emit(v)
+						delete(buffer, next)
+						next++
+					}
+				} else {
+					buffer[res.idx] = res.val
+				}
+			}
+		}
+	})
+
+	return out
 }
