@@ -2,7 +2,6 @@ package chankit
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"slices"
 	"testing"
@@ -10,114 +9,84 @@ import (
 )
 
 const (
-	rounds   = 100
-	itemsMax = 1000
-	parNMax  = 12
-	bufMax   = 64
-	mul      = 10
-	maxSleep = 0 * time.Millisecond
+	maxSleep = 3 * time.Millisecond
+	mul      = 3
 )
 
-func TestMapsGen(t *testing.T) {
-	cases := []struct {
-		name   string
-		items  []int
-		parN   int
-		bufCap int
-	}{
-		{"empty-unbuffered", nil, 1, 0},
-		{"empty-buffered", nil, 1, 32},
-		{"single-item-unbuffered", []int{1}, 1, 0},
-		{"single-item-buffered", []int{1}, 4, 32},
-	}
+func FuzzMapTest(f *testing.F) {
+	f.Add(0, 1, 0)
+	f.Add(0, 1, 32)
+	f.Add(1, 1, 0)
+	f.Add(1, 4, 32)
+	f.Add(1000, 1, 0)
+	f.Add(1000, 4, 0)
+	f.Add(1000, 4, 16)
 
-	for _, c := range cases {
-		t.Run("Corner/"+c.name, func(t *testing.T) {
-			t.Parallel()
-			checkAllVariants(t, c.items, c.parN, c.bufCap)
-		})
-	}
-
-	runRandom := func(tag string, bufSelector func() int) {
-		for i := range rounds {
-			items := randItems(itemsMax)
-			parN := rand.Intn(parNMax) + 1
-			bufCap := bufSelector()
-
-			t.Run(fmt.Sprintf("%s/%d", tag, i), func(t *testing.T) {
-				t.Parallel()
-				checkAllVariants(t, items, parN, bufCap)
-			})
-		}
-	}
-
-	runRandom("rng-buffered", func() int { return 0 })
-	runRandom("rng-unbuffered", func() int { return rand.Intn(bufMax) + 1 })
-}
-
-func checkAllVariants(t *testing.T, items []int, parN, buf int) {
 	work := randWork(maxSleep, mul)
 
-	check := func(name string, got []int, ordered bool, iterMul int) {
-		t.Helper()
-		want := transformed(items, iterMul)
-		if ordered {
-			if !slices.Equal(got, want) {
-				t.Fatalf("%s: ordered mismatch", name)
-			}
-		} else {
-			slices.Sort(got)
-			slices.Sort(want)
-			if !slices.Equal(got, want) {
-				t.Fatalf("%s: unordered mismatch", name)
-			}
+	f.Fuzz(func(t *testing.T, itemsN, parN, buf int) {
+		if itemsN < 0 || itemsN > 2000 || parN <= 0 || parN > 64 || buf > 1_000 {
+			t.Skip()
 		}
+
+		items := items(itemsN)
+		opts := WithBuffer(buf)
+
+		t.Run("Map", func(t *testing.T) {
+			t.Parallel()
+			p, ctx := NewPipeline(t.Context())
+			out := Map(ctx, p, slice2chan(items), work, opts)
+			got := chan2slice(out)
+			check(t, p, items, got, true, mul)
+		})
+
+		t.Run("MapConcUnordered", func(t *testing.T) {
+			t.Parallel()
+			p, ctx := NewPipeline(t.Context())
+			out := MapConcUnordered(ctx, p, slice2chan(items), parN, work, opts)
+			got := chan2slice(out)
+			check(t, p, items, got, false, mul)
+		})
+
+		t.Run("MapConcOrdered", func(t *testing.T) {
+			t.Parallel()
+			p, ctx := NewPipeline(t.Context())
+			out := MapConcOrdered(ctx, p, slice2chan(items), parN, work, opts)
+			got := chan2slice(out)
+			check(t, p, items, got, true, mul)
+		})
+
+		t.Run("MapMultiStage", func(t *testing.T) {
+			t.Parallel()
+			p, ctx := NewPipeline(t.Context())
+			out1 := Map(ctx, p, slice2chan(items), work, opts)
+			out2 := MapConcOrdered(ctx, p, out1, parN, work, opts)
+			got := chan2slice(out2)
+			check(t, p, items, got, true, mul*mul)
+		})
+	})
+}
+
+func check(t *testing.T, p *Pipeline, items, got []int, ordered bool, mul int) {
+	t.Helper()
+
+	if err := p.Wait(); err != nil {
+		t.Fatalf("pipeline failed %v", err)
 	}
 
-	// Map
-	func() {
-		p, ctx := NewPipeline(context.Background())
-		out := Map(ctx, p, slice2chan(items), work, WithBuffer(buf))
-		got := chan2slice(out)
-		if err := p.Wait(); err != nil {
-			t.Fatalf("Map Wait(): %v", err)
-		}
-		check("Map", got, true, mul)
-	}()
+	want := transformed(items, mul)
 
-	// MapConcOrdered
-	func() {
-		p, ctx := NewPipeline(context.Background())
-		out := MapConcOrdered(ctx, p, slice2chan(items), parN, work, WithBuffer(buf))
-		got := chan2slice(out)
-		if err := p.Wait(); err != nil {
-			t.Fatalf("MapConcOrdered Wait(): %v", err)
+	if ordered {
+		if !slices.Equal(got, want) {
+			t.Fatalf("ordered mismatch")
 		}
-		check("MapConcOrdered", got, true, mul)
-	}()
-
-	// MapConcUnordered
-	func() {
-		p, ctx := NewPipeline(context.Background())
-		out := MapConcUnordered(ctx, p, slice2chan(items), parN, work, WithBuffer(buf))
-		got := chan2slice(out)
-		if err := p.Wait(); err != nil {
-			t.Fatalf("MapConcUnordered Wait(): %v", err)
+	} else {
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Fatalf("unordered mismatch")
 		}
-		check("MapConcUnordered", got, false, mul)
-	}()
-
-	// MultiStage
-	func() {
-		p, ctx := NewPipeline(context.Background())
-		stage1 := Map(ctx, p, slice2chan(items), work, WithBuffer(buf))
-		stage2 := MapConcOrdered(ctx, p, stage1, parN, work, WithBuffer(buf))
-		got := chan2slice(stage2)
-		if err := p.Wait(); err != nil {
-			t.Fatalf("MultiStage: %v", err)
-		}
-		check("MultiStage", got, true, mul*mul)
-	}()
+	}
 }
 
 func randWork(max time.Duration, mul int) func(context.Context, int) (int, error) {
@@ -129,11 +98,10 @@ func randWork(max time.Duration, mul int) func(context.Context, int) (int, error
 	}
 }
 
-func randItems(max int) []int {
-	n := rand.Intn(max) + 1
+func items(n int) []int {
 	items := make([]int, n)
 	for i := range items {
-		items[i] = rand.Intn(10_000)
+		items[i] = i
 	}
 	return items
 }
