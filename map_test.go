@@ -18,14 +18,14 @@ func FuzzMapTest(f *testing.F) {
 	f.Add(0, 1, 32)
 	f.Add(1, 1, 0)
 	f.Add(1, 4, 32)
-	f.Add(1000, 1, 0)
-	f.Add(1000, 4, 0)
-	f.Add(1000, 4, 16)
+	f.Add(1_000, 1, 0)
+	f.Add(1_000, 4, 0)
+	f.Add(1_000, 4, 16)
 
 	work := randWork(maxSleep, mul)
 
 	f.Fuzz(func(t *testing.T, itemsN, parN, buf int) {
-		if itemsN < 0 || itemsN > 2000 || parN <= 0 || parN > 64 || buf > 1_000 {
+		if itemsN < 0 || itemsN > 2_000 || parN <= 0 || parN > 64 || buf > 1_000 {
 			t.Skip()
 		}
 
