@@ -9,12 +9,72 @@ func Map[A, B any](
 	ctx context.Context,
 	p *Pipeline,
 	in <-chan A,
+	fn func(A) B,
+	opts ...Option,
+) <-chan B {
+	return mapImpl(
+		ctx,
+		p,
+		in,
+		func(_ context.Context, a A) (B, error) { return fn(a), nil },
+		opts...)
+}
+
+func MapErr[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	fn func(A) (B, error),
+	opts ...Option,
+) <-chan B {
+	return mapImpl(ctx, p, in, func(_ context.Context, a A) (B, error) { return fn(a) }, opts...)
+}
+
+func MapErrCtx[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	fn func(context.Context, A) (B, error),
+	opts ...Option,
+) <-chan B {
+	return mapImpl(ctx, p, in, fn, opts...)
+}
+
+func mapImpl[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
 	fn func(context.Context, A) (B, error),
 	opts ...Option,
 ) <-chan B {
 	cfg := makeConfig(opts)
 	out := make(chan B, cfg.bufCap)
 
+	switch {
+	case cfg.parOpt.n < 0:
+		panic("parallelism < 0")
+	case cfg.parOpt.n == 0:
+		sequentialMapImpl(ctx, p, in, out, fn)
+	case cfg.parOpt.n == 1:
+		concUnorderedMapImpl(ctx, p, in, out, fn, 1)
+	default:
+		if cfg.parOpt.unordered {
+			concUnorderedMapImpl(ctx, p, in, out, fn, cfg.parOpt.n)
+		} else {
+			concOrderedMapImpl(ctx, p, in, out, fn, &cfg.parOpt)
+		}
+	}
+
+	return out
+}
+
+func sequentialMapImpl[A, B any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	out chan<- B,
+	fn func(context.Context, A) (B, error),
+) {
 	p.goSafe(func() error {
 		defer close(out)
 
@@ -40,25 +100,16 @@ func Map[A, B any](
 			}
 		}
 	})
-
-	return out
 }
 
-func MapConcUnordered[A, B any](
+func concUnorderedMapImpl[A, B any](
 	ctx context.Context,
 	p *Pipeline,
 	in <-chan A,
-	parN int,
+	out chan<- B,
 	fn func(context.Context, A) (B, error),
-	opts ...Option,
-) <-chan B {
-	if parN <= 0 {
-		panic("parN must be > 0")
-	}
-
-	cfg := makeConfig(opts)
-	out := make(chan B, cfg.bufCap)
-
+	parN int,
+) {
 	var wg sync.WaitGroup
 	for range parN {
 		wg.Add(1)
@@ -94,25 +145,16 @@ func MapConcUnordered[A, B any](
 		close(out)
 		return nil
 	})
-
-	return out
 }
 
-func MapConcOrdered[A, B any](
+func concOrderedMapImpl[A, B any](
 	ctx context.Context,
 	p *Pipeline,
 	in <-chan A,
-	parN int,
+	out chan<- B,
 	fn func(context.Context, A) (B, error),
-	opts ...Option,
-) <-chan B {
-	if parN <= 0 {
-		panic("parN must be > 0")
-	}
-
-	cfg := makeConfig(opts)
-	out := make(chan B, cfg.bufCap)
-
+	parOpt *parOpt,
+) {
 	type job struct {
 		idx int64
 		val A
@@ -123,7 +165,12 @@ func MapConcOrdered[A, B any](
 		val B
 	}
 
-	sem := make(chan struct{}, parN*4)
+	parN := parOpt.n
+	semCap := parOpt.reorderWindow
+	if semCap <= 0 { // default
+		semCap = 4 * max(parOpt.n, 1)
+	}
+	sem := make(chan struct{}, semCap)
 	jobCh := make(chan job, parN)
 	resCh := make(chan res, parN)
 
@@ -187,14 +234,24 @@ func MapConcOrdered[A, B any](
 	})
 
 	p.goSafe(func() error {
-		defer close(out)
-
 		next := int64(0)
 		buffer := make(map[int64]B, parN)
 
-		emit := func(v B) {
-			out <- v
-			<-sem
+		defer close(out)
+		defer func() {
+			for k := range buffer {
+				delete(buffer, k)
+			}
+		}()
+
+		emit := func(ctx context.Context, v B) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case out <- v:
+				<-sem
+				return nil
+			}
 		}
 
 		for {
@@ -208,20 +265,26 @@ func MapConcOrdered[A, B any](
 						if !ok {
 							return nil
 						}
-						emit(v)
+						if err := emit(ctx, v); err != nil {
+							return err
+						}
 						delete(buffer, next)
 						next++
 					}
 				}
 				if res.idx == next {
-					emit(res.val)
+					if err := emit(ctx, res.val); err != nil {
+						return err
+					}
 					next++
 					for {
 						v, ok := buffer[next]
 						if !ok {
 							break
 						}
-						emit(v)
+						if err := emit(ctx, v); err != nil {
+							return err
+						}
 						delete(buffer, next)
 						next++
 					}
@@ -231,6 +294,4 @@ func MapConcOrdered[A, B any](
 			}
 		}
 	})
-
-	return out
 }

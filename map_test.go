@@ -29,38 +29,47 @@ func FuzzMapTest(f *testing.F) {
 			t.Skip()
 		}
 
-		items := items(itemsN)
+		items := genInts(itemsN)
 		opts := WithBuffer(buf)
 
-		t.Run("Map", func(t *testing.T) {
+		t.Run("Map Serially", func(t *testing.T) {
 			t.Parallel()
 			p, ctx := NewPipeline(t.Context())
-			out := Map(ctx, p, slice2chan(items), work, opts)
+			out := MapErrCtx(ctx, p, slice2chan(items), work, opts)
 			got := chan2slice(out)
 			check(t, p, items, got, true, mul)
 		})
 
-		t.Run("MapConcUnordered", func(t *testing.T) {
+		t.Run("Map Concurrent Ordered", func(t *testing.T) {
 			t.Parallel()
 			p, ctx := NewPipeline(t.Context())
-			out := MapConcUnordered(ctx, p, slice2chan(items), parN, work, opts)
+			out := MapErrCtx(ctx, p, slice2chan(items), work, opts, WithParallel(parN))
+			got := chan2slice(out)
+			check(t, p, items, got, true, mul)
+		})
+
+		t.Run("Map Concurrent Unordered", func(t *testing.T) {
+			t.Parallel()
+			p, ctx := NewPipeline(t.Context())
+			out := MapErrCtx(
+				ctx,
+				p,
+				slice2chan(items),
+				work,
+				opts,
+				WithParallel(parN),
+				WithUnordered(),
+				WithReorderWindow(parN),
+			)
 			got := chan2slice(out)
 			check(t, p, items, got, false, mul)
 		})
 
-		t.Run("MapConcOrdered", func(t *testing.T) {
+		t.Run("Map Multi-Stage", func(t *testing.T) {
 			t.Parallel()
 			p, ctx := NewPipeline(t.Context())
-			out := MapConcOrdered(ctx, p, slice2chan(items), parN, work, opts)
-			got := chan2slice(out)
-			check(t, p, items, got, true, mul)
-		})
-
-		t.Run("MapMultiStage", func(t *testing.T) {
-			t.Parallel()
-			p, ctx := NewPipeline(t.Context())
-			out1 := Map(ctx, p, slice2chan(items), work, opts)
-			out2 := MapConcOrdered(ctx, p, out1, parN, work, opts)
+			out1 := MapErrCtx(ctx, p, slice2chan(items), work, opts)
+			out2 := MapErrCtx(ctx, p, out1, work, opts, WithParallel(parN))
 			got := chan2slice(out2)
 			check(t, p, items, got, true, mul*mul)
 		})
@@ -98,37 +107,10 @@ func randWork(max time.Duration, mul int) func(context.Context, int) (int, error
 	}
 }
 
-func items(n int) []int {
-	items := make([]int, n)
-	for i := range items {
-		items[i] = i
-	}
-	return items
-}
-
 func transformed(in []int, mul int) []int {
 	out := make([]int, len(in))
 	for i, v := range in {
 		out[i] = v * mul
-	}
-	return out
-}
-
-func slice2chan[T any](in []T) <-chan T {
-	out := make(chan T, len(in))
-	go func() {
-		for _, v := range in {
-			out <- v
-		}
-		close(out)
-	}()
-	return out
-}
-
-func chan2slice[T any](ch <-chan T) []T {
-	var out []T
-	for v := range ch {
-		out = append(out, v)
 	}
 	return out
 }
