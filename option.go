@@ -1,6 +1,9 @@
 package chankit
 
-import "runtime"
+import (
+	"context"
+	"runtime"
+)
 
 type Option func(*config)
 
@@ -27,6 +30,10 @@ func WithUnordered() Option {
 	}
 }
 
+func WithUpstreamCancel(cf context.CancelFunc) Option {
+	return func(c *config) { c.upstreamCancel = cf }
+}
+
 // should be rarely used
 func WithReorderWindow(maxGap int) Option {
 	return func(c *config) {
@@ -41,8 +48,9 @@ type parOpt struct {
 }
 
 type config struct {
-	bufCap int
-	parOpt parOpt
+	bufCap         int
+	parOpt         parOpt
+	upstreamCancel context.CancelFunc
 }
 
 func makeConfig(opts []Option) *config {
