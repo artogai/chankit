@@ -41,7 +41,7 @@ func ExampleFilterErr() {
 	parentCtx := context.Background()
 	p, ctx := chankit.NewPipeline(parentCtx)
 
-	// keeps even numbers, fail on 3
+	// keeps even numbers, fails on 3
 	filter := func(v int) (bool, error) {
 		if v == 3 {
 			return false, errors.New("fail on 3")
@@ -107,7 +107,7 @@ func ExampleTake_infiniteProducer() {
 
 	p, ctx := chankit.NewPipeline(parentCtx)
 
-	// take 5 first element, then cancel producer, drain leftovers in background
+	// takes 5 first elements, then cancels the producer, drains leftovers in the background
 	out := chankit.Take(ctx, p, in, 5, chankit.WithUpstreamCancel(prodCancel))
 
 	for v := range out {
@@ -131,7 +131,7 @@ func ExampleTake_finiteProducer() {
 	p, ctx := chankit.NewPipeline(parentCtx)
 
 	in := slice2chan([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
-	// take first 5 elements, then drain producer in background
+	// takes first 5 elements, then drains the producer in the background
 	out := chankit.Take(ctx, p, in, 5)
 
 	for v := range out {
@@ -148,6 +148,28 @@ func ExampleTake_finiteProducer() {
 	// 2
 	// 3
 	// 4
+}
+
+func ExampleDrop() {
+	parentCtx := context.Background()
+	p, ctx := chankit.NewPipeline(parentCtx)
+
+	in := slice2chan([]int{0, 1, 2, 3, 4, 5})
+	// drops 3 first elements
+	out := chankit.Drop(ctx, p, in, 3)
+
+	for v := range out {
+		fmt.Println(v)
+	}
+
+	if err := p.Wait(); err != nil {
+		panic(err)
+	}
+
+	// Output:
+	// 3
+	// 4
+	// 5
 }
 
 func slice2chan[T any](in []T) <-chan T {

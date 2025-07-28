@@ -162,3 +162,45 @@ func Take[A any](
 
 	return out
 }
+
+func Drop[A any](
+	ctx context.Context,
+	p *Pipeline,
+	in <-chan A,
+	n int,
+	opts ...Option,
+) <-chan A {
+	if n < 0 {
+		panic("n must be >= 0")
+	}
+
+	cfg := makeConfig(opts)
+	out := make(chan A, cfg.bufCap)
+
+	p.goSafe(func() error {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case a, ok := <-in:
+				if !ok {
+					return nil
+				}
+
+				if n > 0 {
+					n--
+					continue
+				}
+
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case out <- a:
+				}
+			}
+		}
+	})
+
+	return out
+}

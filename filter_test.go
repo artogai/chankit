@@ -2,6 +2,7 @@ package chankit
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -85,6 +86,39 @@ func TestTake(t *testing.T) {
 				if atomic.LoadInt32(&sent) > int32(n) {
 					t.Fatalf("producer kept running after cancel, sent=%d", sent)
 				}
+			}
+		})
+	}
+}
+
+func TestDrop(t *testing.T) {
+	tests := []struct {
+		name string
+		n    int
+		in   []int
+		want []int
+	}{
+		{"passthrough", 0, []int{1, 2, 3}, []int{1, 2, 3}},
+		{"normal drop", 3, []int{0, 1, 2, 3, 4}, []int{3, 4}},
+		{"drop more than len", 5, []int{7, 8}, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, ctx := NewPipeline(t.Context())
+
+			in := slice2chan(tc.in)
+			out := Drop(ctx, p, in, tc.n)
+			got := chan2slice(out)
+
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+
+			if err := p.Wait(); err != nil {
+				t.Fatalf("pipeline error: %v", err)
 			}
 		})
 	}
