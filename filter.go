@@ -5,7 +5,7 @@ import "context"
 // Filter forwards elements from in that satisfy pred.
 //
 // It closes the returned channel after input is fully consumed.
-// If ctx is canceled, it stops early and returns
+// If ctx is canceled, it stops early and returns.
 func Filter[A any](
 	ctx context.Context,
 	p *Pipeline,
@@ -25,7 +25,7 @@ func Filter[A any](
 //
 // If pred returns an error, the pipeline fails and no more elements are processed.
 // It closes the returned channel after input is fully consumed or on error.
-// If ctx is canceled, it stops early and returns
+// If ctx is canceled, it stops early and returns.
 func FilterErr[A any](
 	ctx context.Context,
 	p *Pipeline,
@@ -43,10 +43,9 @@ func FilterErr[A any](
 
 // FilterErrCtx forwards elements from in that satisfy pred.
 //
-// The predicate receives the context, which may include timeouts or cancellation.
 // If pred returns an error, the pipeline fails and no more elements are processed.
 // It closes the returned channel after input is fully consumed or on error.
-// If ctx is canceled, it stops early and returns
+// If ctx is canceled, it stops early and returns.
 func FilterErrCtx[A any](
 	ctx context.Context,
 	p *Pipeline,

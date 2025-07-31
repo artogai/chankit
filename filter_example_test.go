@@ -10,8 +10,7 @@ import (
 )
 
 func ExampleFilter() {
-	parentCtx := context.Background()
-	p, ctx := chankit.NewPipeline(parentCtx)
+	p, ctx := chankit.NewPipeline(context.Background())
 
 	// keeps even numbers
 	filter := func(v int) bool {
@@ -38,8 +37,7 @@ func ExampleFilter() {
 }
 
 func ExampleFilterErr() {
-	parentCtx := context.Background()
-	p, ctx := chankit.NewPipeline(parentCtx)
+	p, ctx := chankit.NewPipeline(context.Background())
 
 	// keeps even numbers, fails on 3
 	filter := func(v int) (bool, error) {
@@ -66,16 +64,14 @@ func ExampleFilterErr() {
 }
 
 func ExampleFilterErrCtx() {
-	parentCtx := context.Background()
-	p, ctx := chankit.NewPipeline(parentCtx)
+	p, ctx := chankit.NewPipeline(context.Background())
 
 	// simulates io, keeps even numbers
 	filter := func(ctx context.Context, v int) (bool, error) {
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
-		default:
-			time.Sleep(10 * time.Millisecond)
+		case <-time.After(10 * time.Millisecond):
 			return v%2 == 0, nil
 		}
 	}
@@ -127,8 +123,7 @@ func ExampleTake_infiniteProducer() {
 }
 
 func ExampleTake_finiteProducer() {
-	parentCtx := context.Background()
-	p, ctx := chankit.NewPipeline(parentCtx)
+	p, ctx := chankit.NewPipeline(context.Background())
 
 	in := slice2chan([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
 	// takes first 5 elements, then drains the producer in the background
@@ -151,8 +146,7 @@ func ExampleTake_finiteProducer() {
 }
 
 func ExampleDrop() {
-	parentCtx := context.Background()
-	p, ctx := chankit.NewPipeline(parentCtx)
+	p, ctx := chankit.NewPipeline(context.Background())
 
 	in := slice2chan([]int{0, 1, 2, 3, 4, 5})
 	// drops 3 first elements
