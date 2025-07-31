@@ -2,7 +2,7 @@ package chankit
 
 import "context"
 
-// Fold reduces elements from in into an accumulator using f.
+// Fold reduces elements from `in“ into an accumulator using `f“.
 //
 // When the input channel closes without error, the final accumulator is sent
 // and the returned channel is closed.
@@ -23,7 +23,7 @@ func Fold[A, B any](
 	)
 }
 
-// FoldErr reduces elements from in into an accumulator using f.
+// FoldErr reduces elements from `in“ into an accumulator using `f“.
 //
 // When the input channel closes without error, the final accumulator is sent
 // and the returned channel is closed.
@@ -46,7 +46,7 @@ func FoldErr[A, B any](
 	)
 }
 
-// FoldErrCtx reduces elements from in into an accumulator using f.
+// FoldErrCtx reduces elements from `in“ into an accumulator using `f“.
 //
 // When the input channel closes without error, the final accumulator is sent
 // and the returned channel is closed.
