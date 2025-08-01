@@ -96,20 +96,21 @@ func ExampleFilterErrCtx() {
 }
 
 func ExampleTake_infiniteProducer() {
-	parentCtx := context.Background()
+	ctx := context.Background()
 
-	prodCtx, prodCancel := context.WithCancel(parentCtx)
+	prodCtx, prodCancel := context.WithCancel(ctx)
+	defer prodCancel()
 	in := tickerProducer(prodCtx)
 
-	p, ctx := chankit.NewPipeline(parentCtx)
-
-	// takes 5 first elements, then cancels the producer, drains leftovers in the background
-	out := chankit.Take(ctx, p, in, 5, chankit.WithUpstreamCancel(prodCancel))
+	p, pctx := chankit.NewPipeline(ctx)
+	// takes first 5 elements, then drains the producer in the background
+	out := chankit.Take(pctx, p, in, 5)
 
 	for v := range out {
 		fmt.Println(v)
 	}
 
+	prodCancel() // cancel producer
 	if err := p.Wait(); err != nil {
 		panic(err)
 	}

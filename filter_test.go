@@ -38,14 +38,14 @@ func FuzzFilter(f *testing.F) {
 
 func TestTake(t *testing.T) {
 	tests := []struct {
-		name          string
-		withCancelOpt bool
-		bufCap        int
+		name     string
+		isFinite bool
+		bufCap   int
 	}{
-		{"drain-mode-unbuff", false, 0},
-		{"cancel-upstream-unbuff", true, 0},
-		{"drain-mode-buff", false, 32},
-		{"cancel-upstream-buff", true, 32},
+		{"finite-unbuff", true, 0},
+		{"infinite-unbuff", false, 0},
+		{"finite-buff", true, 32},
+		{"infinite-buff", false, 32},
 	}
 
 	for _, tc := range tests {
@@ -55,18 +55,12 @@ func TestTake(t *testing.T) {
 			n := 100
 			sent := int32(0)
 
-			prodCtx := t.Context()
-			opts := []Option{WithBuffer(tc.bufCap)}
-			if tc.withCancelOpt {
-				ctx, prodCancel := context.WithCancel(prodCtx)
-				prodCtx = ctx
-				opts = append(opts, WithUpstreamCancel(prodCancel))
-			}
-
-			in := countingProducer(prodCtx, !tc.withCancelOpt, n, &sent)
+			prodCtx, prodCancel := context.WithCancel(t.Context())
+			defer prodCancel()
+			in := countingProducer(prodCtx, tc.isFinite, n, &sent)
 
 			p, ctx := NewPipeline(t.Context())
-			out := Take(ctx, p, in, n, opts...)
+			out := Take(ctx, p, in, n, WithBuffer(tc.bufCap))
 
 			// drain output
 			got := 0
@@ -77,12 +71,15 @@ func TestTake(t *testing.T) {
 				t.Fatalf("expected %d values, got %d", n, got)
 			}
 
-			// wait for pipeline to finish
+			if !tc.isFinite {
+				prodCancel()
+			}
+
 			if err := p.Wait(); err != nil {
 				t.Fatalf("pipeline error: %v", err)
 			}
 
-			if tc.withCancelOpt {
+			if !tc.isFinite {
 				if atomic.LoadInt32(&sent) > int32(n) {
 					t.Fatalf("producer kept running after cancel, sent=%d", sent)
 				}
@@ -134,12 +131,12 @@ func filterInts(in []int, pred func(x int) bool) []int {
 	return out
 }
 
-func countingProducer(ctx context.Context, finite bool, n int, counter *int32) <-chan int {
+func countingProducer(ctx context.Context, isFinite bool, n int, counter *int32) <-chan int {
 	out := make(chan int)
 	go func() {
 		defer close(out)
 		for i := 0; ; i++ {
-			if finite && i > n*2 {
+			if isFinite && i > n*2 {
 				return
 			}
 			select {

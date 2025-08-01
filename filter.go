@@ -2,7 +2,7 @@ package chankit
 
 import "context"
 
-// Filter forwards elements from `in“ that satisfy `pred“.
+// Filter forwards elements from `in` that satisfy `pred`.
 //
 // It closes the returned channel after input is fully consumed.
 // If ctx is canceled, it stops early and returns.
@@ -21,7 +21,7 @@ func Filter[A any](
 		opts...)
 }
 
-// FilterErr forwards elements from `in“ that satisfy `pred“.
+// FilterErr forwards elements from `in` that satisfy `pred`.
 //
 // If `pred` returns an error, the pipeline fails and no more elements are processed.
 // It closes the returned channel after input is fully consumed or on error.
@@ -87,15 +87,19 @@ func FilterErrCtx[A any](
 	return out
 }
 
-// Take forwards at most `n` elements from `in`, then:
+// Take forwards at most `n` elements from `in` to the returned channel.
 //
-//   - if an upstream-cancel func was supplied via `WithUpstreamCancel`,
-//     it calls that func so the producer branch stops immediately.
-//     Only the producer branch stops; downstream stages continue to consume
-//     the values that are already in flight.
-//   - otherwise it drains in until the producer closes.
+// After the nth element is sent:
 //
-// In both cases it closes the returned channel. `n` <= 0 means "take none"
+//   - it continues to drain and discard any further values from in
+//     until `in` is closed or `ctx` is cancelled, so that upstream senders
+//     never block.
+//
+// The returned channel is then closed.
+// If ctx is cancelled before `n` elements are seen, Take stops immediately
+// and closes the channel.
+//
+// A non-positive `n` means "take none".
 func Take[A any](
 	ctx context.Context,
 	p *Pipeline,
@@ -107,9 +111,6 @@ func Take[A any](
 	out := make(chan A, cfg.bufCap)
 
 	if n <= 0 {
-		if cfg.upstreamCancel != nil {
-			cfg.upstreamCancel()
-		}
 		close(out)
 		return out
 	}
@@ -136,22 +137,19 @@ func Take[A any](
 				taken++
 
 				if taken == n {
-					if cfg.upstreamCancel != nil {
-						cfg.upstreamCancel()
-					} else {
-						p.goSafe(func() error {
-							for {
-								select {
-								case <-ctx.Done():
-									return ctx.Err()
-								case _, ok := <-in:
-									if !ok {
-										return nil
-									}
+					// drain
+					p.goSafe(func() error {
+						for {
+							select {
+							case <-ctx.Done():
+								return ctx.Err()
+							case _, ok := <-in:
+								if !ok {
+									return nil
 								}
 							}
-						})
-					}
+						}
+					})
 
 					return nil
 				}
