@@ -3,7 +3,6 @@ package chankit
 import (
 	"context"
 	"math/rand"
-	"slices"
 	"testing"
 	"time"
 )
@@ -79,22 +78,14 @@ func FuzzMapTest(f *testing.F) {
 func check(t *testing.T, p *Pipeline, items, got []int, ordered bool, mul int) {
 	t.Helper()
 
-	if err := p.Wait(); err != nil {
-		t.Fatalf("pipeline failed %v", err)
-	}
+	assertNoPipeError(t, p)
 
 	want := transformed(items, mul)
 
 	if ordered {
-		if !slices.Equal(got, want) {
-			t.Fatalf("ordered mismatch")
-		}
+		assertSlicesEqual(t, want, got)
 	} else {
-		slices.Sort(got)
-		slices.Sort(want)
-		if !slices.Equal(got, want) {
-			t.Fatalf("unordered mismatch")
-		}
+		assertSameElementsAs(t, want, got)
 	}
 }
 

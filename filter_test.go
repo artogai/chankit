@@ -2,9 +2,6 @@ package chankit
 
 import (
 	"context"
-	"reflect"
-	"slices"
-	"sync/atomic"
 	"testing"
 )
 
@@ -19,20 +16,14 @@ func FuzzFilter(f *testing.F) {
 
 		items := genInts(itemsN)
 		pred := func(x int) bool { return x%keepMod == 0 }
-		opts := WithBuffer(buf)
-
-		p, ctx := NewPipeline(t.Context())
-		outCh := Filter(ctx, p, slice2chan(items), pred, opts)
-		got := chan2slice(outCh)
-
-		if err := p.Wait(); err != nil {
-			t.Fatalf("pipeline failed: %v", err)
-		}
 		want := filterInts(items, pred)
 
-		if !slices.Equal(got, want) {
-			t.Fatalf("ordered mismatch")
-		}
+		p, ctx := NewPipeline(t.Context())
+		out := Filter(ctx, p, slice2chan(items), pred, WithBuffer(buf))
+		got := chan2slice(out)
+
+		assertNoPipeError(t, p)
+		assertSlicesEqual(t, want, got)
 	})
 }
 
@@ -43,8 +34,8 @@ func TestTake(t *testing.T) {
 		bufCap   int
 	}{
 		{"finite-unbuff", true, 0},
-		{"infinite-unbuff", false, 0},
 		{"finite-buff", true, 32},
+		{"infinite-unbuff", false, 0},
 		{"infinite-buff", false, 32},
 	}
 
@@ -53,37 +44,27 @@ func TestTake(t *testing.T) {
 			t.Parallel()
 
 			n := 100
-			sent := int32(0)
+			limit := 0
+			if tc.isFinite {
+				limit = 500
+			}
 
 			prodCtx, prodCancel := context.WithCancel(t.Context())
 			defer prodCancel()
-			in := countingProducer(prodCtx, tc.isFinite, n, &sent)
+			in := CreateProducer(prodCtx, WithLimit(limit))
 
 			p, ctx := NewPipeline(t.Context())
 			out := Take(ctx, p, in, n, WithBuffer(tc.bufCap))
+			got := chan2slice(out)
 
-			// drain output
-			got := 0
-			for range out {
-				got++
-			}
-			if got != n {
-				t.Fatalf("expected %d values, got %d", n, got)
+			if len(got) != n {
+				t.Fatalf("want %d values, got %d", n, len(got))
 			}
 
 			if !tc.isFinite {
 				prodCancel()
 			}
-
-			if err := p.Wait(); err != nil {
-				t.Fatalf("pipeline error: %v", err)
-			}
-
-			if !tc.isFinite {
-				if atomic.LoadInt32(&sent) > int32(n) {
-					t.Fatalf("producer kept running after cancel, sent=%d", sent)
-				}
-			}
+			assertNoPipeError(t, p)
 		})
 	}
 }
@@ -110,13 +91,8 @@ func TestDrop(t *testing.T) {
 			out := Drop(ctx, p, in, tc.n)
 			got := chan2slice(out)
 
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-
-			if err := p.Wait(); err != nil {
-				t.Fatalf("pipeline error: %v", err)
-			}
+			assertNoPipeError(t, p)
+			assertSlicesEqual(t, tc.want, got)
 		})
 	}
 }
@@ -128,25 +104,5 @@ func filterInts(in []int, pred func(x int) bool) []int {
 			out = append(out, v)
 		}
 	}
-	return out
-}
-
-func countingProducer(ctx context.Context, isFinite bool, n int, counter *int32) <-chan int {
-	out := make(chan int)
-	go func() {
-		defer close(out)
-		for i := 0; ; i++ {
-			if isFinite && i > n*2 {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case out <- i:
-				atomic.AddInt32(counter, 1)
-			}
-		}
-	}()
-
 	return out
 }

@@ -9,9 +9,9 @@ import (
 
 func TestFold(t *testing.T) {
 	tests := []struct {
-		name     string
-		expected int
-		input    []int
+		name  string
+		want  int
+		input []int
 	}{
 		{"empty input", 0, nil},
 		{"sum", 15, []int{0, 1, 2, 3, 4, 5}},
@@ -27,13 +27,11 @@ func TestFold(t *testing.T) {
 			out := Fold(ctx, p, slice2chan(tc.input), 0, agg)
 
 			v := <-out
-			if v != tc.expected {
-				t.Fatalf("expected %d, got %d", tc.expected, v)
+			if v != tc.want {
+				t.Fatalf("expected %d, got %d", tc.want, v)
 			}
 
-			if err := p.Wait(); err != nil {
-				t.Fatalf("pipeline error: %v", err)
-			}
+			assertNoPipeError(t, p)
 		})
 	}
 }

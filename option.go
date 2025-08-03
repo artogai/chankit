@@ -36,6 +36,36 @@ func WithReorderWindow(maxGap int) Option {
 	}
 }
 
+type HaltStrategy int
+
+const (
+	HaltBoth   HaltStrategy = iota // wait for both sides (default)
+	HaltLeft                       // stop when left side finishes
+	HaltRight                      // stop when right side finishes
+	HaltEither                     // stop when either side finishes
+)
+
+func (h HaltStrategy) String() string {
+	switch h {
+	case HaltBoth:
+		return "HaltBoth"
+	case HaltLeft:
+		return "HaltLeft"
+	case HaltRight:
+		return "HaltRight"
+	case HaltEither:
+		return "HaltEither"
+	default:
+		return "UnknownHaltStrategy"
+	}
+}
+
+func WithHaltStrategy(s HaltStrategy) Option {
+	return func(c *config) {
+		c.haltStrategy = s
+	}
+}
+
 type parOpt struct {
 	n             int
 	unordered     bool
@@ -43,8 +73,9 @@ type parOpt struct {
 }
 
 type config struct {
-	bufCap int
-	parOpt parOpt
+	bufCap       int
+	parOpt       parOpt
+	haltStrategy HaltStrategy
 }
 
 func makeConfig(opts []Option) *config {
