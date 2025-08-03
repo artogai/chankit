@@ -6,7 +6,7 @@ import "context"
 //
 // When the input channel closes without error, the final accumulator is sent
 // and the returned channel is closed.
-// If ctx is canceled, it stops early and returns
+// If ctx is canceled, it stops early and returns.
 func Fold[A, B any](
 	ctx context.Context,
 	p *Pipeline,

@@ -80,7 +80,11 @@ func TestFoldErrCtx(t *testing.T) {
 		go func() {
 			defer close(in)
 			for i := range 1000000 {
-				in <- i
+				select {
+				case <-ctx.Done():
+					return
+				case in <- i:
+				}
 			}
 		}()
 
