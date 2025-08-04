@@ -2,8 +2,6 @@ package chankit
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 )
 
 func Merge[A any](
@@ -13,70 +11,68 @@ func Merge[A any](
 	rightIn <-chan A,
 	opts ...Option,
 ) <-chan A {
+	if leftIn == nil || rightIn == nil {
+		panic("Merge: input channels must not be nil")
+	}
+
 	cfg := makeConfig(opts)
 	out := make(chan A, cfg.bufCap)
 
-	mergeCtx, mergeCancel := context.WithCancel(ctx)
+	var leftDone, rightDone bool
 
-	var wg sync.WaitGroup
-
-	var leftDone, rightDone atomic.Bool
-
-	shouldStop := func() bool {
+	shouldStop := func() (bool, error) {
 		switch cfg.haltStrategy {
 		case HaltLeft:
-			return leftDone.Load()
+			return leftDone, nil
 		case HaltRight:
-			return rightDone.Load()
+			return rightDone, nil
 		case HaltEither:
-			return leftDone.Load() || rightDone.Load()
+			return leftDone || rightDone, nil
 		case HaltBoth:
-			return leftDone.Load() && rightDone.Load()
+			return leftDone && rightDone, nil
 		default:
-			return false
+			return true, ErrUnknownHaltStrategy
 		}
 	}
 
-	mergeOne := func(isLeft bool, in <-chan A) {
-		wg.Add(1)
-		p.goSafe(func() error {
-			defer wg.Done()
+	p.goSafe(func() error {
+		defer close(out)
 
-			for {
+		for {
+			stop, err := shouldStop()
+			if err != nil {
+				return err
+			}
+			if stop {
+				return nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case la, ok := <-leftIn:
+				if !ok {
+					leftDone = true
+					leftIn = nil
+					continue
+				}
 				select {
-				case <-mergeCtx.Done():
-					return mergeCtx.Err()
-				case a, ok := <-in:
-					if !ok {
-						if isLeft {
-							leftDone.Store(true)
-						} else {
-							rightDone.Store(true)
-						}
-						if shouldStop() {
-							mergeCancel() // signal to other goroutine to stop
-						}
-						return nil
-					}
-
-					select {
-					case <-mergeCtx.Done():
-						return mergeCtx.Err()
-					case out <- a:
-					}
+				case <-ctx.Done():
+				case out <- la:
+				}
+			case ra, ok := <-rightIn:
+				if !ok {
+					rightDone = true
+					rightIn = nil
+					continue
+				}
+				select {
+				case <-ctx.Done():
+				case out <- ra:
 				}
 			}
-		})
-	}
-
-	mergeOne(true, leftIn)
-	mergeOne(false, rightIn)
-
-	go func() {
-		wg.Wait()
-		mergeCancel()
-		close(out)
-	}()
+		}
+	})
 
 	return out
 }
